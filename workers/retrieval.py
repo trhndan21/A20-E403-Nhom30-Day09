@@ -20,7 +20,7 @@ Output (vào AgentState):
 
 Gọi độc lập để test:
     python workers/retrieval.py
-"""
+"""https://github.com/tttduong/A20-E403-Nhom30-Day09/pull/12/conflict?name=workers%252Fretrieval.py&ancestor_oid=945ae8e04aa61f44d6d181e1325c43100e0a96fa&base_oid=fa979e8632f507351769fe89d1d18b0133fd8e46&head_oid=2db70c731b641a8f313f893fb38bb72f753802ad
 
 import os
 import re
@@ -144,6 +144,48 @@ def _get_collection():
     return collection
 
 
+def _fallback_text_search(query: str, top_k: int = TOP_K_SELECT) -> list:
+    """
+    Fallback: keyword search qua data/docs/*.txt khi ChromaDB không khả dụng.
+    Dùng để đảm bảo search_kb luôn trả về kết quả có ý nghĩa.
+    """
+    import glob
+    import re
+
+    docs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "docs")
+    txt_files = glob.glob(os.path.join(docs_dir, "*.txt"))
+
+    # Chuẩn hóa query thành tập từ khóa
+    query_words = set(re.sub(r"[^\w\s]", "", query.lower()).split())
+
+    results = []
+    for filepath in txt_files:
+        source = os.path.basename(filepath)
+        try:
+            with open(filepath, encoding="utf-8") as f:
+                content = f.read()
+        except Exception:
+            continue
+
+        # Tách thành các đoạn theo dòng trống
+        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+        for para in paragraphs:
+            para_lower = para.lower()
+            hits = sum(1 for w in query_words if w in para_lower)
+            if hits == 0:
+                continue
+            score = round(hits / max(len(query_words), 1), 4)
+            results.append({
+                "text": para[:500],
+                "source": source,
+                "score": score,
+                "metadata": {"source": source},
+            })
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:top_k]
+
+
 def retrieve_dense(
     query: str,
     top_k_search: int = TOP_K_SEARCH,
@@ -156,6 +198,8 @@ def retrieve_dense(
     - Bước 1: Query ChromaDB với n_results=top_k_search (mặc định 10)
     - Bước 2: Lọc bỏ chunk có score < ABSTAIN_THRESHOLD (0.3)
     - Bước 3: Trả về tối đa top_k_select (mặc định 3) chunks còn lại
+
+    Fallback: Nếu ChromaDB không khả dụng → keyword search qua data/docs/*.txt
 
     Returns:
         list of {"text": str, "source": str, "score": float, "metadata": dict}
@@ -194,8 +238,8 @@ def retrieve_dense(
         return chunks[:top_k_select]
 
     except Exception as e:
-        print(f"⚠️  ChromaDB query failed: {e}")
-        return []
+        print(f"⚠️  ChromaDB query failed: {e}. Falling back to text search.")
+        return _fallback_text_search(query, top_k=top_k_select)
 
 
 def run(state: dict) -> dict:
